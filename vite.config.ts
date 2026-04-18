@@ -6,10 +6,11 @@ export default defineConfig({
   build: {
     lib: {
       entry: 'src/index.tsx',
-      formats: ['es'],
+      formats: ['cjs'],
       fileName: () => 'index.js',
     },
     rollupOptions: {
+      external: ['react', 'react-dom', 'react/jsx-runtime'],
       output: {
         inlineDynamicImports: true,
       },
