@@ -197,25 +197,70 @@ const PdfViewer = ({ tab, workspacePath, fileSystem }: PdfViewerProps) => {
         });
         const textLayer = pdfEl?.querySelector('.react-pdf__Page__textContent');
         if (!textLayer) continue;
-        const spans = textLayer.querySelectorAll('span');
+        const spans = Array.from(textLayer.querySelectorAll('span'));
+
+        // Build concatenated page text with a span map for cross-span highlighting
+        interface SpanEntry { span: Element; start: number; end: number; }
+        const spanMap: SpanEntry[] = [];
+        let pageText = '';
+        for (const span of spans) {
+          const t = span.textContent || '';
+          if (!t) continue;
+          if (pageText.length > 0 && !pageText.endsWith(' ') && !t.startsWith(' ')) pageText += ' ';
+          spanMap.push({ span, start: pageText.length, end: pageText.length + t.length });
+          pageText += t;
+        }
+
         pageComments.forEach((c) => {
           if (!c.selectedText) return;
-          const expectedTop = (c.topRatio || 0) * pageHeight, tol = pageHeight * 0.05;
+          const st = c.selectedText.replace(/\s+/g, ' ').trim();
+          if (!st) return;
+          const expectedTop = (c.topRatio || 0) * pageHeight;
+
+          // Find all occurrences in concatenated text
+          const occurrences: number[] = [];
+          let searchPos = 0;
+          while ((searchPos = pageText.indexOf(st, searchPos)) !== -1) {
+            occurrences.push(searchPos);
+            searchPos += st.length;
+          }
+          if (!occurrences.length) return;
+
+          // Pick occurrence closest to topRatio
+          let matchStart = occurrences[0];
+          if (occurrences.length > 1) {
+            let bestDist = Infinity;
+            for (const occ of occurrences) {
+              const entry = spanMap.find(e => e.start <= occ && occ < e.end);
+              if (!entry) continue;
+              const relTop = entry.span.getBoundingClientRect().top - pageRect.top;
+              const dist = Math.abs(relTop - expectedTop);
+              if (dist < bestDist) { bestDist = dist; matchStart = occ; }
+            }
+          }
+
+          const matchEnd = matchStart + st.length;
           const rects: HighlightRect[] = [];
-          for (const span of spans) {
-            const st = span.textContent || ''; if (!st.trim()) continue;
-            const sr = span.getBoundingClientRect(), relTop = sr.top - pageRect.top;
-            if (Math.abs(relTop - expectedTop) > tol) continue;
-            const idx = st.indexOf(c.selectedText); if (idx === -1) continue;
-            const tn = span.firstChild; if (!tn || tn.nodeType !== Node.TEXT_NODE) continue;
+
+          for (const entry of spanMap) {
+            if (entry.end <= matchStart || entry.start >= matchEnd) continue;
+            const tn = entry.span.firstChild;
+            if (!tn || tn.nodeType !== Node.TEXT_NODE) continue;
+            const localStart = Math.max(0, matchStart - entry.start);
+            const localEnd = Math.min((tn as Text).length, matchEnd - entry.start);
+            if (localStart >= localEnd) continue;
             try {
               const range = document.createRange();
-              range.setStart(tn, Math.min(idx, (tn as Text).length));
-              range.setEnd(tn, Math.min(idx + c.selectedText.length, (tn as Text).length));
+              range.setStart(tn, localStart);
+              range.setEnd(tn, localEnd);
               for (const cr of range.getClientRects())
                 rects.push({ top: cr.top - pageRect.top, left: cr.left - pageRect.left, width: cr.width, height: cr.height });
-            } catch { rects.push({ top: relTop, left: sr.left - pageRect.left, width: sr.width, height: sr.height }); }
+            } catch {
+              const sr = entry.span.getBoundingClientRect();
+              rects.push({ top: sr.top - pageRect.top, left: sr.left - pageRect.left, width: sr.width, height: sr.height });
+            }
           }
+
           if (rects.length) newHL[c.id] = { rects, pageNum };
         });
       }
@@ -262,7 +307,7 @@ const PdfViewer = ({ tab, workspacePath, fileSystem }: PdfViewerProps) => {
   }, []);
 
   const handleMouseUp = useCallback(() => {
-    const sel = window.getSelection(), text = sel?.toString().trim();
+    const sel = window.getSelection(), text = sel?.toString().replace(/\s+/g, ' ').trim();
     if (!text || !scrollContainerRef.current) { setShowCommentButton(false); return; }
     let pageNum: number | null = null, pageEl: HTMLDivElement | null = null;
     for (let i = 1; i <= (numPages || 0); i++) {
