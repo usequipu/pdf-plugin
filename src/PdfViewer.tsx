@@ -216,8 +216,7 @@ const PdfViewer = ({ tab, workspacePath, fileSystem }: PdfViewerProps) => {
         const spans = Array.from(textLayer.querySelectorAll('span'));
 
         // Build concatenated page text with a span map for cross-span highlighting
-        interface SpanEntry { span: Element; start: number; end: number; }
-        const spanMap: SpanEntry[] = [];
+        const spanMap: { span: Element; start: number; end: number }[] = [];
         let pageText = '';
         for (const span of spans) {
           const t = span.textContent || '';
@@ -227,43 +226,75 @@ const PdfViewer = ({ tab, workspacePath, fileSystem }: PdfViewerProps) => {
           pageText += t;
         }
 
+        // Whitespace-stripped index for fuzzy matching (handles "K−1" vs "K − 1",
+        // hyphenated line-breaks, and spacing differences in math notation)
+        const normMap: number[] = [];
+        for (let i = 0; i < pageText.length; i++) {
+          if (!/\s/.test(pageText[i])) normMap.push(i);
+        }
+        const normPageText = normMap.map(i => pageText[i]).join('');
+
         pageComments.forEach((c) => {
           if (!c.selectedText) return;
           const st = c.selectedText.replace(/\s+/g, ' ').trim();
           if (!st) return;
           const expectedTop = (c.topRatio || 0) * pageHeight;
 
-          // Find all occurrences in concatenated text
-          const occurrences: number[] = [];
-          let searchPos = 0;
-          while ((searchPos = pageText.indexOf(st, searchPos)) !== -1) {
-            occurrences.push(searchPos);
-            searchPos += st.length;
-          }
-          if (!occurrences.length) return;
+          let origMatchStart = -1, origMatchEnd = -1;
 
-          // Pick occurrence closest to topRatio
-          let matchStart = occurrences[0];
-          if (occurrences.length > 1) {
-            let bestDist = Infinity;
-            for (const occ of occurrences) {
-              const entry = spanMap.find(e => e.start <= occ && occ < e.end);
-              if (!entry) continue;
-              const relTop = entry.span.getBoundingClientRect().top - pageRect.top;
-              const dist = Math.abs(relTop - expectedTop);
-              if (dist < bestDist) { bestDist = dist; matchStart = occ; }
+          // 1. Try exact match in concatenated page text
+          const exactOccs: number[] = [];
+          let sp = 0;
+          while ((sp = pageText.indexOf(st, sp)) !== -1) { exactOccs.push(sp); sp += st.length; }
+          if (exactOccs.length) {
+            let best = exactOccs[0];
+            if (exactOccs.length > 1) {
+              let bestDist = Infinity;
+              for (const occ of exactOccs) {
+                const entry = spanMap.find(e => e.start <= occ && occ < e.end);
+                if (!entry) continue;
+                const dist = Math.abs(entry.span.getBoundingClientRect().top - pageRect.top - expectedTop);
+                if (dist < bestDist) { bestDist = dist; best = occ; }
+              }
             }
+            origMatchStart = best;
+            origMatchEnd = best + st.length;
           }
 
-          const matchEnd = matchStart + st.length;
-          const rects: HighlightRect[] = [];
+          // 2. Fall back to whitespace-stripped match (handles math notation spacing)
+          if (origMatchStart === -1) {
+            const normSt = st.replace(/\s/g, '');
+            if (!normSt) return;
+            const fuzzyOccs: number[] = [];
+            let fp = 0;
+            while ((fp = normPageText.indexOf(normSt, fp)) !== -1) { fuzzyOccs.push(fp); fp += normSt.length; }
+            if (!fuzzyOccs.length) return;
+            let bestNorm = fuzzyOccs[0];
+            if (fuzzyOccs.length > 1) {
+              let bestDist = Infinity;
+              for (const occ of fuzzyOccs) {
+                if (occ >= normMap.length) continue;
+                const origPos = normMap[occ];
+                const entry = spanMap.find(e => e.start <= origPos && origPos < e.end);
+                if (!entry) continue;
+                const dist = Math.abs(entry.span.getBoundingClientRect().top - pageRect.top - expectedTop);
+                if (dist < bestDist) { bestDist = dist; bestNorm = occ; }
+              }
+            }
+            const normEnd = bestNorm + normSt.length;
+            origMatchStart = normMap[bestNorm];
+            origMatchEnd = normEnd > 0 && normEnd <= normMap.length
+              ? normMap[normEnd - 1] + 1
+              : pageText.length;
+          }
 
+          const rects: HighlightRect[] = [];
           for (const entry of spanMap) {
-            if (entry.end <= matchStart || entry.start >= matchEnd) continue;
+            if (entry.end <= origMatchStart || entry.start >= origMatchEnd) continue;
             const tn = entry.span.firstChild;
             if (!tn || tn.nodeType !== Node.TEXT_NODE) continue;
-            const localStart = Math.max(0, matchStart - entry.start);
-            const localEnd = Math.min((tn as Text).length, matchEnd - entry.start);
+            const localStart = Math.max(0, origMatchStart - entry.start);
+            const localEnd = Math.min((tn as Text).length, origMatchEnd - entry.start);
             if (localStart >= localEnd) continue;
             try {
               const range = document.createRange();
