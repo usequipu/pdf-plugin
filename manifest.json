@@ -1,8 +1,8 @@
 {
   "id": "pdf-plugin",
   "name": "PDF Viewer",
-  "version": "0.1.2",
-  "description": "Multi-page PDF viewer with zoom, page navigation, and text selection.",
+  "version": "0.2.0",
+  "description": "Multi-page PDF viewer with lazy loading, zoom, text selection, and frame annotations.",
   "entry": "index.js",
   "quipuVersion": ">=0.14.0",
   "fileTypes": [".pdf"]
