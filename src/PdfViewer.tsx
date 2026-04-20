@@ -1,8 +1,8 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { MagnifyingGlassPlusIcon, MagnifyingGlassMinusIcon, ChatTextIcon, XIcon } from '@phosphor-icons/react';
-import 'react-pdf/dist/Page/AnnotationLayer.css';
-import 'react-pdf/dist/Page/TextLayer.css';
+import annotationLayerCss from 'react-pdf/dist/Page/AnnotationLayer.css?inline';
+import textLayerCss from 'react-pdf/dist/Page/TextLayer.css?inline';
 import type { FileSystemService, ViewerProps } from './plugin-types';
 
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
@@ -107,6 +107,22 @@ const PdfViewer = ({ tab, workspacePath, fileSystem }: PdfViewerProps) => {
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const commentsRef = useRef<Record<string, HTMLDivElement | null>>({});
   const fileUrl = useMemo(() => fileSystem.getFileUrl(filePath), [fileSystem, filePath]);
+
+  // Inject react-pdf layer CSS into the document — the plugin loader only loads
+  // index.js, so the extracted CSS file is never applied otherwise.
+  useEffect(() => {
+    for (const [id, css] of [
+      ['pdf-plugin-annotation-layer', annotationLayerCss],
+      ['pdf-plugin-text-layer', textLayerCss],
+    ] as const) {
+      if (!document.getElementById(id)) {
+        const style = document.createElement('style');
+        style.id = id;
+        style.textContent = css;
+        document.head.appendChild(style);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     const el = scrollContainerRef.current; if (!el) return;
